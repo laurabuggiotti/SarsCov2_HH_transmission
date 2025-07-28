@@ -90,7 +90,7 @@ Rscript scripts/Supplementary_Fig7.R
 ```bibtex
 @article{buggiotti2025household,
   title={Reconstruction of SARS-CoV-2 transmissibility within households in the UK Virus Watch Study},
-  author={Buggiotti, Laura and Torres Ortiz, Arturo and Didelot, Xavier and others},
+  author={Buggiotti L., Torres Ortiz A., Didelot X., Yavlinsky A., Geismar C., Kovar J., Miller C., Martin Bernal L. M., Williams R., Abubakar I., Aldridge R.W., Breuer J.},
   journal={medRxiv},
   year={2025},
   doi={10.1101/2025.06.12.25329406}
