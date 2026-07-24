@@ -1,397 +1,289 @@
 # ==============================================================================
-# SARS-CoV-2 Transmission Direction Inference - Supplementary Material
-# Supplementary Figure 6: TransPhylo-based transmission probability matrices
-# 
-# This script performs transmission direction inference using TransPhylo and 
-# creates heatmap visualizations showing transmission probabilities between
-# individuals within households, organized by viral lineage.
+# Supplementary Figure X — Characterisation of recurrent artifact variant positions
 #
-# The analysis includes:
-# 1. Phylogenetic tree dating using BactDating
-# 2. Transmission tree inference using TransPhylo
-# 3. Who-infected-whom (WIW) probability matrix calculation
-# 4. Lineage-specific transmission probability heatmaps
+# Three-panel figure documenting that the recurrent low-frequency variants
+# excluded from the bottleneck analysis are spatially associated with
+# ARTIC v4.1 primer binding sites and behave as primer-binding-site
+# artifacts rather than classical cross-sample read misassignment.
 #
-# Input: 
-#   - vw_noProbSiteMutPos_full.12.raxml.bestTree - Phylogenetic tree
-#   - metadata_tree.txt - Sample collection dates
-#   - lineage_VL.csv - Sample metadata with household and lineage information
-# Output: 
-#   - Transmission probability heatmaps by viral lineage
-#   - TransPhylo analysis plots and traces
+# Panel a: Position of artifact variants overlaid on ARTIC v4.1 primer scheme
+#          (genome track)
+# Panel b: Table of 13 artifact positions with prevalence, median freq,
+#          and primer-adjacency annotation
+# Panel c: Lineage-stratified frequency distribution at position 14960
+#          (the most prevalent artifact), showing variants distributed
+#          across all major lineages at low frequency without ever
+#          being fixed
+#
+# All inputs are small TSV/CSV files you copy from the cluster:
+#   - variant_blacklist.tsv      from 06_build_variant_blacklist.py
+#   - artifact_position_lineage_data.tsv   (generated below — needs cluster step)
+# Plus a small inline data frame of primer-adjacency annotation we determined
+# from your cluster run.
 # ==============================================================================
 
-# Load required libraries
-library(ape)          # for phylogenetic tree analysis
-library(BactDating)   # for bacterial/viral dating
-library(TransPhylo)   # for transmission tree inference
-library(lubridate)    # for date handling
-library(dplyr)        # for data manipulation
-library(ggplot2)      # for plotting
-library(reshape2)     # for data reshaping
-library(lattice)      # for levelplot
-library(coda)         # for MCMC diagnostics
-
-# Set file paths (adjust as needed for your directory structure)
-tree_path <- "data/vw_noProbSiteMutPos_full.12.raxml.bestTree"
-metadata_path <- "data/metadata_tree.txt"
-lineage_path <- "data/lineage_VL.csv"
-output_dir <- "figures"
-analysis_dir <- "analysis_output"
-
-# Create output directories if they don't exist
-for (dir in c(output_dir, analysis_dir)) {
-  if (!dir.exists(dir)) {
-    dir.create(dir, recursive = TRUE)
-  }
-}
-
-# ==============================================================================
-# PART 1: Load and prepare phylogenetic tree
-# ==============================================================================
-
-cat("Loading phylogenetic tree from:", tree_path, "\n")
-t_full <- read.tree(tree_path)
-
-# Process tree for TransPhylo analysis
-t <- t_full
-
-cat("Original tree branch length sum:", sum(t$edge.length), "\n")
-
-# Scale branch lengths to genome length (substitutions per genome)
-# SARS-CoV-2 genome length: ~29,903 nucleotides
-t$edge.length <- t$edge.length * 29903
-
-cat("Scaled tree branch length sum:", sum(t$edge.length), "\n")
-
-# Clean tip labels (remove suffix after dash)
-t$tip.label <- sapply(strsplit(t$tip.label, "\\-"), '[', 1)
-
-cat("Tree contains", Ntip(t), "tips after processing\n")
-
-# ==============================================================================
-# PART 2: Load and process collection date metadata
-# ==============================================================================
-
-cat("Loading collection date metadata from:", metadata_path, "\n")
-metad <- read.table(metadata_path, header = TRUE)
-
-cat("Metadata contains", nrow(metad), "records\n")
-
-# Convert collection dates to decimal years
-metad$CollectionDate <- decimal_date(as.Date(metad$CollectionDate, '%d/%m/%Y'))
-
-# Create named vector linking tip labels to dates
-dates <- setNames(metad$CollectionDate, metad$tipLabel)
-
-# Reorder to match tree tip labels
-dates <- dates[t$tip.label]
-
-cat("Date range:", min(dates, na.rm = TRUE), "to", max(dates, na.rm = TRUE), "\n")
-cat("Number of dated samples:", sum(!is.na(dates)), "\n")
-
-# ==============================================================================
-# PART 3: Phylogenetic dating with BactDating
-# ==============================================================================
-
-cat("Performing phylogenetic dating analysis...\n")
-
-# Find optimal root for the tree
-cat("Finding optimal root position...\n")
-rooted_full <- initRoot(t, dates)
-
-# Assess temporal signal with root-to-tip regression
-cat("Assessing root-to-tip temporal signal...\n")
-pdf(file.path(analysis_dir, "root_to_tip_regression.pdf"))
-r <- roottotip(rooted_full, dates)
-dev.off()
-
-cat("Root-to-tip correlation: R² =", round(r$R2, 4), "\n")
-
-# Perform Bayesian dating analysis
-cat("Running BactDating MCMC analysis (this may take several minutes)...\n")
-res_rooted_full <- bactdate(rooted_full, dates, nbIts = 1e5)
-
-# Save results
-saveRDS(res_rooted_full, file = file.path(analysis_dir, "bactdating_results.rds"))
-
-# Generate diagnostic plots
-cat("Creating BactDating diagnostic plots...\n")
-
-# MCMC trace plots
-pdf(file.path(analysis_dir, "bactdating_trace.pdf"))
-plot(res_rooted_full, 'trace')
-dev.off()
-
-# Tree with confidence intervals
-pdf(file.path(analysis_dir, "dated_tree_CI.pdf"))
-plot(res_rooted_full, 'treeCI', cex = 0.2)
-dev.off()
-
-# Inferred root
-pdf(file.path(analysis_dir, "inferred_root.pdf"))
-plot(res_rooted_full, 'treeRoot', cex = 0.3)
-dev.off()
-
-# Extract dated tree
-dated_tree <- res_rooted_full$tree
-
-# ==============================================================================
-# PART 4: Load sample metadata and prepare for TransPhylo
-# ==============================================================================
-
-cat("Loading sample metadata from:", lineage_path, "\n")
-vw_metadata <- read.csv(lineage_path)
-
-cat("Sample metadata contains", nrow(vw_metadata), "records\n")
-
-# Filter for household transmission pairs (hh2)
-metad_hh2 <- vw_metadata %>% filter(hh_type == 'hh2')
-cat("Household transmission pairs (hh2):", nrow(metad_hh2), "samples\n")
-
-# Update tree tip labels with unique household identifiers
-dated_tree$tip.label[match(vw_metadata$SAMPLE, dated_tree$tip.label)] <- vw_metadata$hh_type_unique_b
-
-# ==============================================================================
-# PART 5: TransPhylo transmission tree inference
-# ==============================================================================
-
-cat("Preparing data for TransPhylo analysis...\n")
-
-# Convert to ptree format for TransPhylo
-obs_end <- lubridate::decimal_date(as.Date('2023/7/1'))
-pt <- ptreeFromPhylo(dated_tree, obs_end)
-
-cat("Created ptree object for TransPhylo\n")
-
-# Quick initial inference
-cat("Running initial TransPhylo inference...\n")
-res_initial <- inferTTree(pt, w.shape = 0.01, w.scale = 1)
-
-# Main MCMC inference with specific parameters
-cat("Running full TransPhylo MCMC inference (this will take considerable time)...\n")
-cat("Using parameters optimized for within-household transmission\n")
-
-# Set pi to high value as we're interested in within-household directionality
-mcmc_Tree2 <- inferTTree(pt, 
-                        w.mean = 0.01,
-                        w.std = 0.009,
-                        startPi = 0.99, 
-                        updatePi = FALSE,
-                        mcmcIterations = 1000000)
-
-# Save TransPhylo results
-saveRDS(mcmc_Tree2, file = file.path(analysis_dir, "transphylo_results.rds"))
-
-# Plot transmission tree
-pdf(file.path(analysis_dir, "transmission_tree.pdf"))
-plot(mcmc_Tree2)
-dev.off()
-
-# ==============================================================================
-# PART 6: MCMC diagnostics and parameter extraction
-# ==============================================================================
-
-cat("Performing MCMC diagnostics...\n")
-
-# Extract MCMC trace
-mcmc_trace <- extractParmTrace(mcmc_Tree2)
-
-# Calculate effective sample sizes
-eff_sizes <- effectiveSize(mcmc_trace)
-cat("MCMC effective sample sizes:\n")
-print(eff_sizes)
-
-# Consensus transmission tree
-cons <- consTTree(mcmc_Tree2)
-ttree <- extractTTree(cons)
-
-# ==============================================================================
-# PART 7: Who-infected-whom probability matrix calculation
-# ==============================================================================
-
-cat("Computing who-infected-whom probability matrix...\n")
-
-# Calculate transmission probability matrix
-mat <- computeMatWIW(mcmc_Tree2)
-
-cat("WIW matrix dimensions:", nrow(mat), "x", ncol(mat), "\n")
-
-# Process matrix data for analysis
-matp_m <- reshape2:::melt.matrix(mat, na.rm = TRUE)
-matp_m_f <- matp_m[matp_m$Var1 != matp_m$Var2, ]  # Remove diagonal
-
-# Merge with household metadata
-metaD <- vw_metadata %>% select(SAMPLE, hh, hh_type) %>% distinct()
-
-# Add infector metadata
-names(matp_m_f)[names(matp_m_f) == 'Var1'] <- 'Infector'
-names(matp_m_f)[names(matp_m_f) == 'Var2'] <- 'Infectee'
-
-df <- merge(matp_m_f, metaD, by.x = 'Infector', by.y = 'SAMPLE', all = FALSE)
-names(df)[names(df) == 'hh'] <- 'hh_Infector'
-names(df)[names(df) == 'hh_type'] <- 'hh_type_Infector'
-
-# Add infectee metadata
-df1 <- merge(df, metaD, by.x = 'Infectee', by.y = 'SAMPLE', all = FALSE)
-names(df1)[names(df1) == 'hh'] <- 'hh_Infectee'
-names(df1)[names(df1) == 'hh_type'] <- 'hh_type_Infectee'
-
-# Filter for within-household transmissions
-df2 <- df1 %>% 
-  filter(hh_Infector == hh_Infectee, 
-         hh_Infector != 'hh1', 
-         hh_Infectee != 'hh1', 
-         hh_type_Infector != 'hh2_noTransmission')
-
-# Determine transmission direction
-df3 <- df2 %>%
-  group_by(hh_Infectee) %>% 
-  mutate(
-    TransPhylo_d_r = case_when(
-      value == max(value) & value != min(value) ~ "Donor",
-      value == min(value) & value != max(value) ~ "Recipient",
-      TRUE ~ "Unclear"
-    )
-  )
-
-# Save transmission direction results
-write.csv(df3, file.path(analysis_dir, "transmission_directions.csv"), row.names = FALSE)
-
-# ==============================================================================
-# PART 8: Create lineage-specific transmission probability heatmaps
-# ==============================================================================
-
-cat("Creating lineage-specific transmission probability heatmaps...\n")
-
-# Define household samples for analysis
-list_hh2 <- unique(metad_hh2$SAMPLE)
-
-# Subset matrix to household samples
-mat_hh2 <- mat[list_hh2, list_hh2, drop = FALSE]
-
-# Group samples by lineage
-grouped_samples <- split(metad_hh2$SAMPLE, metad_hh2$LINEAGE)
-
-# Filter groups to include only existing samples in matrix
-grouped_samples <- lapply(grouped_samples, function(samples) {
-  valid_samples <- samples[samples %in% rownames(mat_hh2) & samples %in% colnames(mat_hh2)]
-  return(valid_samples)
+# ----------- USER PATHS ----------------------------------------------------
+input_dir  <- "~/UCL Dropbox/Laura Buggiotti/Mac/Desktop/VirusWatch/bottleneck_figures"
+output_dir <- "~/UCL Dropbox/Laura Buggiotti/Mac/Desktop/VirusWatch/bottleneck_figures/output"
+
+blacklist_path        <- file.path(input_dir, "variant_blacklist.tsv")
+position_14960_path   <- file.path(input_dir, "position_14960_per_sample.tsv")
+# (this is the file 08_check_index_hopping.py wrote out)
+# ---------------------------------------------------------------------------
+
+
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Install missing packages
+required <- c("dplyr","tidyr","ggplot2","ggpubr","cowplot","forcats","scales",
+              "gridExtra","grid","gtable")
+missing <- required[!required %in% installed.packages()[,"Package"]]
+if (length(missing) > 0) install.packages(missing, repos = "https://cloud.r-project.org")
+
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(ggplot2); library(ggpubr)
+  library(cowplot); library(forcats); library(scales)
+  library(gridExtra); library(grid); library(gtable)
 })
 
-# Remove empty groups
-grouped_samples <- grouped_samples[lengths(grouped_samples) > 0]
+# ============================================================================
+# Inline data: artifact positions + primer adjacency (from your cluster run)
+# ============================================================================
 
-# Create matrices for each lineage group
-group_matrices <- lapply(grouped_samples, function(samples) {
-  mat_hh2[samples, samples, drop = FALSE]
-})
-
-cat("Creating heatmaps for", length(group_matrices), "lineage groups\n")
-
-# Define consistent color scale
-mid_value <- 0.5
-fill_scale <- scale_fill_gradient2(
-  low = 'orchid1', 
-  mid = "white", 
-  high = "turquoise2",
-  midpoint = mid_value, 
-  limits = c(0, 1),
-  breaks = seq(0, 1, by = 0.2), 
-  labels = as.character(seq(0, 1, by = 0.2))
+# 13 positions identified by the cohort-wide artifact screen (prevalence >5%)
+# Columns derived from variant_blacklist.tsv and your primer-adjacency check
+artifact_table <- tibble::tribble(
+  ~position, ~ref, ~alt, ~n_samples, ~pct_samples, ~median_freq, ~sd_freq, ~near_primer, ~primer_name,
+  14960,  "A", "T",  234,  97.9, 0.0948, 0.0629, TRUE,  "nCoV_50_LEFT",
+  5744,  "T", "C",  200,  83.7, 0.0451, 0.0099, FALSE, NA_character_,
+  15521,  "T", "A",  142,  59.4, 0.0632, 0.1052, TRUE,  "nCoV_52_LEFT",
+  11291,  "G", "A",   49,  20.5, 0.0541, 0.0314, TRUE,  "nCoV_38_LEFT",
+  8835,  "T", "C",   33,  13.8, 0.0632, 0.0791, FALSE, NA_character_,
+  11956,  "T", "C",   29,  12.1, 0.1227, 0.0963, TRUE,  "nCoV_40_LEFT",
+  28363,  "A", "T",   27,  11.3, 0.0833, 0.0319, FALSE, NA_character_,
+  28370,  "A", "T",   27,  11.3, 0.1333, 0.0772, TRUE,  "nCoV_94_RIGHT",
+  21639,  "C", "A",   24,  10.0, 0.0901, 0.0356, FALSE, NA_character_,
+  18012,  "T", "C",   23,   9.6, 0.1194, 0.1267, TRUE,  "nCoV_59_RIGHT",
+  1545,  "T", "C",   18,   7.5, 0.2126, 0.1566, TRUE,  "nCoV_6_LEFT",
+  18014,  "C", "T",   17,   7.1, 0.0455, 0.1046, TRUE,  "nCoV_59_RIGHT",
+  23118,  "A", "T",   12,   5.0, 0.0392, 0.0072, TRUE,  "nCoV_76_RIGHT_alt1"
+) %>% mutate(
+  variant_label = sprintf("%d %s>%s", position, ref, alt),
+  variant_label = factor(variant_label, levels = variant_label[order(position)])
 )
 
-# Generate heatmap for each lineage group
-for (group in names(group_matrices)) {
-  mat_lin <- group_matrices[[group]]
-  
-  # Skip if matrix is too small
-  if (nrow(mat_lin) < 2 || ncol(mat_lin) < 2) {
-    cat("Skipping", group, "- insufficient samples\n")
-    next
-  }
-  
-  cat("Creating heatmap for lineage:", group, "(", nrow(mat_lin), "x", ncol(mat_lin), ")\n")
-  
-  # Convert matrix to long format
-  mat_long <- melt(mat_lin)
-  colnames(mat_long) <- c("Row", "Column", "Value")
-  
-  # Create heatmap
-  plot <- ggplot(mat_long, aes(x = Column, y = Row, fill = Value)) +
-    geom_tile() +
-    fill_scale +
-    theme_minimal() +
-    theme(
-      legend.title = element_blank(),
-      axis.text.x = element_text(hjust = 0.5, vjust = 0.5, size = 8, angle = 90),
-      axis.text.y = element_text(hjust = 0.5, vjust = 0.5, size = 8),
-      axis.title.x = element_blank(),
-      axis.title.y = element_blank(),
-      plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
-    ) +
-    # Gray diagonal (self-infection impossible)
-    geom_tile(data = mat_long[mat_long$Row == mat_long$Column, ], 
-              aes(x = Column, y = Row), fill = "gray41") +
-    labs(title = paste("Transmission Probabilities:", group)) +
-    scale_x_discrete(labels = colnames(mat_lin)) +
-    scale_y_discrete(labels = rownames(mat_lin))
-  
-  # Save individual lineage heatmap
-  filename <- file.path(output_dir, paste0("SupplementaryFigure6_", group, "_transmission_matrix.pdf"))
-  ggsave(plot = plot, height = 8, width = 10, filename = filename)
-  
-  cat("Saved heatmap:", filename, "\n")
-}
+# ============================================================================
+# Panel A: Genome track of artifact positions
+# ============================================================================
 
-# ==============================================================================
-# PART 9: Summary statistics and interpretation
-# ==============================================================================
+# A schematic representation of the SARS-CoV-2 genome (29903 bp)
+# with major gene boundaries marked, artifact positions plotted
 
-cat("\n=== SUPPLEMENTARY FIGURE 6 ANALYSIS SUMMARY ===\n")
+genes <- tibble::tribble(
+  ~gene,   ~start,  ~end,
+  "ORF1ab",   266, 21555,
+  "S",     21563, 25384,
+  "ORF3a", 25393, 26220,
+  "E",     26245, 26472,
+  "M",     26523, 27191,
+  "ORF6",  27202, 27387,
+  "ORF7a", 27394, 27759,
+  "ORF7b", 27756, 27887,
+  "ORF8",  27894, 28259,
+  "N",     28274, 29533
+) %>% mutate(
+  ymid = 0.5,
+  fill = rep(c("#E8E8E8","#C8C8C8"), length.out = n())
+)
 
-# Dating analysis summary
-cat("BactDating analysis:\n")
-cat("- Root-to-tip R²:", round(r$R2, 4), "\n")
-cat("- Temporal signal strength:", ifelse(r$R2 > 0.3, "Strong", ifelse(r$R2 > 0.1, "Moderate", "Weak")), "\n")
+# Only show major gene labels to avoid overcrowding in the 3' end
+genes_to_label <- genes %>% filter(gene %in% c("ORF1ab", "S", "N"))
+margin <- ggplot2::margin
 
-# TransPhylo analysis summary
-cat("\nTransPhylo analysis:\n")
-cat("- MCMC iterations:", 1000000, "\n")
-cat("- Within-household transmission probability (π):", 0.99, "\n")
-cat("- Generation time mean:", 0.01, "\n")
-cat("- Generation time std:", 0.009, "\n")
+panel_a <- ggplot() +
+  # Genome scale bar
+  annotate("segment", x = 0, xend = 29903, y = 0.5, yend = 0.5,
+           colour = "grey70", linewidth = 0.6) +
+  # Gene blocks (still draw all of them, just don't label the small ones)
+  geom_rect(data = genes,
+            aes(xmin = start, xmax = end, ymin = 0.35, ymax = 0.65,
+                fill = fill), colour = "grey50", linewidth = 0.2) +
+  geom_text(data = genes_to_label,
+            aes(x = (start+end)/2, y = 0.5, label = gene),
+            size = 3, vjust = 0.5, fontface = "bold") +
+  scale_fill_identity() +
+  # Artifact variants — colour-coded by primer adjacency
+  geom_segment(data = artifact_table,
+               aes(x = position, xend = position, y = 0.7, yend = 1.0,
+                   colour = near_primer), linewidth = 0.8) +
+  geom_point(data = artifact_table,
+             aes(x = position, y = 1.05, colour = near_primer,
+                 size = pct_samples), shape = 19) +
+  scale_colour_manual(values = c("TRUE" = "#D55E00", "FALSE" = "#0072B2"),
+                      labels = c("TRUE" = "Within 30 bp of ARTIC primer",
+                                 "FALSE" = "Not near primer"),
+                      name = NULL) +
+  scale_size_continuous(name = "% of samples",
+                        range = c(2, 7),
+                        breaks = c(5, 25, 50, 100)) +
+  # Label the top artifacts (more headroom for the labels)
+  geom_text(data = artifact_table %>% filter(pct_samples > 20),
+            aes(x = position, y = 1.20, label = variant_label),
+            angle = 90, hjust = 0, size = 2.8) +
+  scale_x_continuous(
+    name = "Position on SARS-CoV-2 genome (MN908947.3)",
+    breaks = seq(0, 30000, 5000),
+    labels = comma,
+    limits = c(-500, 30500),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(limits = c(0.3, 2.0), expand = c(0, 0)) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 11, face = "bold"),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "top",
+    legend.box = "horizontal",
+    legend.text = element_text(size = 9),
+    plot.margin = ggplot2::margin(t = 10, r = 15, b = 25, l = 15)
+  )
 
-# Matrix analysis summary
-cat("\nTransmission probability matrix:\n")
-cat("- Matrix size:", nrow(mat), "x", ncol(mat), "\n")
-cat("- Household transmission pairs analyzed:", nrow(df2), "\n")
-cat("- Clear transmission directions identified:", sum(df3$TransPhylo_d_r %in% c("Donor", "Recipient")), "\n")
+print(panel_a)
 
-# Lineage analysis summary
-cat("\nLineage-specific analysis:\n")
-cat("- Total lineage groups:", length(grouped_samples), "\n")
-cat("- Groups with sufficient data for heatmaps:", sum(lengths(grouped_samples) >= 2), "\n")
+# ============================================================================
+# Panel B: Artifact table
+# ============================================================================
 
-lineage_counts <- sapply(grouped_samples, length)
-cat("- Samples per lineage:\n")
-for (i in 1:min(5, length(lineage_counts))) {
-  cat("  ", names(lineage_counts)[i], ":", lineage_counts[i], "samples\n")
-}
+# Render as a table grob
+table_for_display <- artifact_table %>%
+  mutate(
+    Position = position,
+    Variant = sprintf("%s>%s", ref, alt),
+    `n (%) samples` = sprintf("%d (%.1f%%)", n_samples, pct_samples),
+    `Median freq` = sprintf("%.3f", median_freq),
+    `SD freq` = sprintf("%.3f", sd_freq),
+    `ARTIC primer (within 30 bp)` = ifelse(near_primer, primer_name, "—")
+  ) %>%
+  select(Position, Variant, `n (%) samples`, `Median freq`, `SD freq`,
+         `ARTIC primer (within 30 bp)`)
 
-cat("\nMethodological validation:\n")
-if (all(eff_sizes > 200)) {
-  cat("- MCMC convergence: Good (all ESS > 200)\n")
-} else {
-  cat("- MCMC convergence: Check required (some ESS < 200)\n")
-}
+tab_theme <- ttheme_minimal(
+  core    = list(fg_params = list(cex = 0.8),
+                 bg_params = list(fill = c("white","grey95"), col = NA),
+                 padding   = unit(c(4, 4), "mm")),
+  colhead = list(fg_params = list(cex = 0.85, fontface = "bold"),
+                 bg_params = list(fill = "grey85", col = NA),
+                 padding   = unit(c(4, 4), "mm"))
+)
 
-cat("\nOutput files generated:\n")
-cat("- Individual lineage transmission probability heatmaps\n")
-cat("- BactDating diagnostic plots\n")
-cat("- TransPhylo analysis results\n")
-cat("- Transmission direction assignments\n")
+panel_b <- tableGrob(table_for_display, rows = NULL, theme = tab_theme)
 
-# ==============================================================================
-# End of script
-# ==============================================================================
+# Header annotation — split across two lines for readability
+header_text <- textGrob(
+  paste0("13 recurrent variant positions identified by cohort-wide screen ",
+         "(>5% of 239 samples).\n",
+         "9/13 (69%) within 30 bp of ARTIC v4.1 primer binding site",
+         " \u2014 a ~5\u00d7 enrichment over expectation."),
+  gp = gpar(fontsize = 10, fontface = "italic"),
+  just = "centre"
+)
+
+# Tight stacking: header sits directly above the table with minimal gap
+panel_b_full <- arrangeGrob(
+  header_text,
+  panel_b,
+  ncol = 1,
+  heights = unit.c(unit(2.2, "lines"), unit(1, "null")),
+  padding = unit(0.1, "cm")
+)
+
+# ============================================================================
+# Panel C: Lineage-stratified frequency distribution at position 14960
+# ============================================================================
+
+# Load the per-sample frequency data for position 14960
+pos_data <- read.delim(position_14960_path, sep = "\t",
+                       stringsAsFactors = FALSE)
+# Columns: sample, freq, ref, alt, lineage
+
+# Group rare lineages into "Other" for visual clarity
+top_lineages <- pos_data %>%
+  filter(!is.na(lineage), lineage != "NA") %>%
+  count(lineage, sort = TRUE) %>%
+  slice_head(n = 6) %>%
+  pull(lineage)
+
+pos_data <- pos_data %>%
+  mutate(
+    lineage_grouped = case_when(
+      is.na(lineage) | lineage == "NA" ~ "Unassigned",
+      lineage %in% top_lineages ~ lineage,
+      TRUE ~ "Other"
+    ),
+    lineage_grouped = factor(lineage_grouped,
+                             levels = c(top_lineages, "Other", "Unassigned"))
+  )
+
+panel_c <- ggplot(pos_data, aes(x = freq, y = lineage_grouped,
+                                colour = lineage_grouped)) +
+  # Shaded artifact band
+  annotate("rect", xmin = 0.03, xmax = 0.15, ymin = -Inf, ymax = Inf,
+           fill = "#FFC4C4", alpha = 0.3) +
+  # Shaded fixation band
+  annotate("rect", xmin = 0.90, xmax = 1.00, ymin = -Inf, ymax = Inf,
+           fill = "#C4E0C4", alpha = 0.3) +
+  geom_jitter(width = 0, height = 0.25, alpha = 0.7, size = 1.5) +
+  scale_colour_brewer(palette = "Set2", guide = "none") +
+  scale_x_continuous(
+    name = sprintf("ALT_FREQ at position 14960 (A>T)"),
+    breaks = c(0, 0.03, 0.15, 0.5, 0.9, 1.0),
+    labels = c("0", "0.03", "0.15", "0.5", "0.9", "1.0"),
+    limits = c(-0.02, 1.02),
+    expand = c(0, 0)
+  ) +
+  labs(y = "Pangolin lineage") +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 11, face = "bold"),
+    axis.text = element_text(size = 10),
+    panel.grid.major.y = element_line(colour = "grey90"),
+    panel.grid.minor = element_blank(),
+    plot.margin = ggplot2::margin(t = 25, r = 15, b = 5, l = 15)
+  ) +
+  # Place labels OUTSIDE the panel using coord_cartesian + clip = "off"
+  coord_cartesian(clip = "off") +
+  annotate("text", x = 0.09, y = length(levels(pos_data$lineage_grouped)) + 0.7,
+           label = "Artifact band\n(3-15%)",
+           size = 3.2, colour = "#9C2424", hjust = 0.5, fontface = "italic") +
+  annotate("text", x = 0.95, y = length(levels(pos_data$lineage_grouped)) + 0.7,
+           label = "Fixation\n(\u226590%)",
+           size = 3.2, colour = "#244C24", hjust = 0.5, fontface = "italic")
+
+print(panel_c)
+
+# ============================================================================
+# Assemble multi-panel figure
+# ============================================================================
+
+# Panel B is a grob; wrap it in plot_grid-compatible form
+top_row <- plot_grid(panel_a, labels = "a", label_size = 18)
+mid_row <- plot_grid(panel_b_full, labels = "b", label_size = 18)
+bot_row <- plot_grid(panel_c, labels = "c", label_size = 18)
+
+final_fig <- plot_grid(
+  top_row, mid_row, bot_row,
+  ncol = 1,
+  rel_heights = c(0.65, 0.85, 0.95),
+  align = "v",
+  axis = "lr"
+)
+
+ggsave(file.path(output_dir, "SuppFigX_artifact_characterisation.pdf"),
+       plot = final_fig, width = 11, height = 13)
+ggsave(file.path(output_dir, "SuppFigX_artifact_characterisation.png"),
+       plot = final_fig, width = 11, height = 13, dpi = 300)
+
+cat("Figure saved to:", file.path(output_dir, "SuppFigX_artifact_characterisation.pdf"), "\n")

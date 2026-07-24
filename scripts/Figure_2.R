@@ -1,15 +1,15 @@
 # ==============================================================================
 # SARS-CoV-2 Phylogenetic Distance Analysis
 # Figure 2: Within-host diversity - pairwise branch lengths by household type
-# 
+#
 # This script calculates pairwise phylogenetic distances from a phylogenetic tree
-# and compares genetic distances between samples from the same household vs 
+# and compares genetic distances between samples from the same household vs
 # different households. Creates violin plots showing within-host diversity.
 #
-# Input: 
+# Input:
 #   - VW_full_ivar_1k.raxml.support - phylogenetic tree file
 #   - lineage_VL.csv - metadata with sample and household information
-# Output: 
+# Output:
 #   - Violin plot comparing pairwise branch lengths by household type
 # ==============================================================================
 
@@ -39,9 +39,6 @@ if (!dir.exists(output_dir)) {
 cat("Reading phylogenetic tree from:", tree_path, "\n")
 vw_tree_full <- read.tree(tree_path)
 
-# Optional: visualize tree with branch lengths (uncomment to view)
-# ggtree(vw_tree_full) + geom_text2(aes(label = branch.length), hjust = -.3, size = 1)
-
 cat("Tree contains", length(vw_tree_full$tip.label), "samples\n")
 cat("Sample of tip labels:", head(unique(vw_tree_full$tip.label)), "\n")
 
@@ -58,29 +55,29 @@ t <- reshape2:::melt.matrix(branch_dist, na.rm = TRUE)
 
 # Extract patient IDs from sample names (assuming format: PatientID-SampleType)
 t_mo <- t %>%
-  mutate(pat1 = str_split(Var1, "-", simplify = T)[,1], 
+  mutate(pat1 = str_split(Var1, "-", simplify = T)[,1],
          pat2 = str_split(Var2, "-", simplify = T)[,1])
 
 # Filter out self-comparisons and get unique pairs
-t_mo1 <- t_mo %>% 
-  filter(pat1 != pat2) %>% 
+t_mo1 <- t_mo %>%
+  filter(pat1 != pat2) %>%
   distinct()
 
 # Create reverse pairs to ensure all combinations
 t_mo2 <- t %>%
-  mutate(pat1 = str_split(Var2, "-", simplify = T)[,1], 
+  mutate(pat1 = str_split(Var2, "-", simplify = T)[,1],
          pat2 = str_split(Var1, "-", simplify = T)[,1])
 
-t_mo3 <- t_mo2 %>% 
-  filter(pat1 != pat2) %>% 
+t_mo3 <- t_mo2 %>%
+  filter(pat1 != pat2) %>%
   distinct()
 
 # Combine and deduplicate
 t_f <- rbind(t_mo1, t_mo3)
-t_f1 <- t_f %>% 
-  filter(pat1 != pat2) %>% 
-  distinct() %>% 
-  select(pat1, pat2, value) %>% 
+t_f1 <- t_f %>%
+  filter(pat1 != pat2) %>%
+  distinct() %>%
+  select(pat1, pat2, value) %>%
   distinct()
 
 cat("Total pairwise comparisons:", nrow(t_f1), "\n")
@@ -113,7 +110,7 @@ data_final_full <- merged1 %>%
   mutate(HH_final = case_when(
     hh_pat1 == hh_pat2 ~ hh_pat2,
     TRUE ~ 'hh1'
-  )) %>% 
+  )) %>%
   mutate(HH_final = sub("_.*", "", HH_final))
 
 # Standardize household labels
@@ -152,25 +149,25 @@ plot_violin <- data_final_full %>%
   stat_compare_means(comparisons = my_comparisons, label = "p.signif") +
   stat_compare_means(label.y = -4) +
   scale_y_continuous(limits = c(-18, -4), breaks = seq(-18, -4, 2)) +
-  labs(title = "Within-host diversity", 
-       x = '', 
+  labs(title = "Within-host diversity",
+       x = '',
        y = "Pairwise branch length (log2)") +
   theme(legend.position = 'none',
         plot.title = element_text(size = 18, face = 'bold'),
-        axis.title = element_text(size = 14, face = 'bold')) 
+        axis.title = element_text(size = 14, face = 'bold'))
 
 # Display the main plot
 print(plot_violin)
 
 # Save plots
-ggsave(plot = plot_violin, 
-       height = 6, 
-       width = 8, 
+ggsave(plot = plot_violin,
+       height = 6,
+       width = 8,
        filename = file.path(output_dir, "Figure2_phylogenetic_distance_violin.pdf"))
 
-ggsave(plot = plot_box, 
-       height = 6, 
-       width = 8, 
+ggsave(plot = plot_box,
+       height = 6,
+       width = 8,
        filename = file.path(output_dir, "Figure2_phylogenetic_distance_boxplot.pdf"))
 
 cat("Plots saved to:", output_dir, "\n")
@@ -197,7 +194,7 @@ cat("\nStatistical test (Wilcoxon rank-sum test):\n")
 if(sum(!is.na(data_final_full$value)) > 0) {
   same_hh <- data_final_full$value[data_final_full$HH_final == "Same HH" & !is.na(data_final_full$value)]
   diff_hh <- data_final_full$value[data_final_full$HH_final == "Different HH" & !is.na(data_final_full$value)]
-  
+
   if(length(same_hh) > 0 & length(diff_hh) > 0) {
     test_result <- wilcox.test(same_hh, diff_hh)
     cat("p-value =", test_result$p.value, "\n")

@@ -1,229 +1,133 @@
 # ==============================================================================
-# SARS-CoV-2 Phylogenetic Tree Comparison - Supplementary Material
-# Supplementary Figure 4: Tanglegram comparing phylogenetic trees
-# 
-# This script creates a tanglegram visualization comparing two phylogenetic trees:
-# 1. Tree A: Full tree with bootstrap support (maximum likelihood)
-# 2. Tree B: Consensus tree with different parameters
-# 
-# The tanglegram shows how the same samples cluster differently between trees,
-# providing insight into phylogenetic reconstruction consistency and the
-# impact of different analytical parameters on tree topology.
-#
-# Input: 
-#   - VW_full_ivar_1k.raxml.support - Full tree with bootstrap support
-#   - vw_cons_ivar01.13.raxml.bestTree - Consensus tree
-# Output: 
-#   - Tanglegram visualization showing tree comparison with connecting lines
+# Supplementary Figure 5 (revised) — Global phylogeny with Virus Watch samples
+# in context of Nextstrain UK background sequences.
 # ==============================================================================
 
-# Load required libraries
-library(ape)          # for phylogenetic tree analysis
-library(phytools)     # for tanglegram and tree comparison functions
+suppressPackageStartupMessages({
+  library(ape)
+  library(ggtree)
+  library(ggplot2)
+})
 
-# Set file paths (adjust as needed for your directory structure)
-tree_full_path <- "data/VW_full_ivar_1k.raxml.support"
-tree_consensus_path <- "data/vw_cons_ivar01.13.raxml.bestTree"
-output_dir <- "figures"
+# ----------- USER PATHS — edit these ------------------------------------
+tree_path     <- "~/UCL Dropbox/Laura Buggiotti/Mac/Desktop/VirusWatch/Arturo/genbank/tree/Nextstrain_HighCov_VW_consREF_tree.treefile"
+metadata_path <- "~/UCL Dropbox/Laura Buggiotti/Mac/Desktop/VirusWatch/Arturo/genbank/NextstrainHighCov_VW_metadata.csv"
+output_path   <- "/Users/Laura/Desktop/VirusWatch/Arturo/SuppFig5_revised.pdf"
+# ------------------------------------------------------------------------
 
-# Create output directory if it doesn't exist
-if (!dir.exists(output_dir)) {
-  dir.create(output_dir, recursive = TRUE)
+
+# ============================================================================
+# 1. Load tree
+# ============================================================================
+
+tree <- read.tree(tree_path)
+cat("Tree tips:", length(tree$tip.label), "\n")
+cat("First 5 tip labels:", paste(head(tree$tip.label, 5), collapse = ", "), "\n\n")
+
+
+# ============================================================================
+# 2. Load metadata (auto-detect tab vs comma)
+# ============================================================================
+
+# Force CSV reader (your metadata is comma-separated)
+vw_metadata <- read.csv(metadata_path, stringsAsFactors = FALSE)
+
+# If it somehow came in with a single mashed column, try tab separator
+if (ncol(vw_metadata) < 3) {
+  vw_metadata <- read.table(metadata_path, sep = "\t", header = TRUE,
+                            stringsAsFactors = FALSE, quote = "", fill = TRUE)
 }
 
-# ==============================================================================
-# PART 1: Load phylogenetic trees
-# ==============================================================================
+cat("Metadata columns:", paste(names(vw_metadata), collapse = ", "), "\n")
+cat("Metadata rows:", nrow(vw_metadata), "\n\n")
 
-cat("Loading phylogenetic trees...\n")
 
-# Load Tree A: Full tree with bootstrap support
-cat("Reading full tree from:", tree_full_path, "\n")
-treeA <- read.tree(tree_full_path)
+# ============================================================================
+# 3. Build tip-annotation data frame
+# ============================================================================
 
-# Load Tree B: Consensus tree
-cat("Reading consensus tree from:", tree_consensus_path, "\n")
-treeB <- read.tree(tree_consensus_path)
+tip_df <- data.frame(
+  label = tree$tip.label,
+  category = "Nextstrain background",
+  stringsAsFactors = FALSE
+)
 
-cat("Tree A (full) contains", Ntip(treeA), "tips and", Nnode(treeA), "internal nodes\n")
-cat("Tree B (consensus) contains", Ntip(treeB), "tips and", Nnode(treeB), "internal nodes\n")
-
-# ==============================================================================
-# PART 2: Process and prepare trees for comparison
-# ==============================================================================
-
-cat("Processing trees for comparison...\n")
-
-# Convert trees to cladograms (equal branch lengths for cleaner visualization)
-cat("Converting to cladograms with equal branch lengths...\n")
-treeA <- compute.brlen(treeA)
-treeB <- compute.brlen(treeB)
-
-# Check if trees are identical
-trees_identical <- identical(treeA, treeB)
-cat("Trees are identical:", trees_identical, "\n")
-
-# Validate tip labels match between trees
-treeA_tips <- sort(treeA$tip.label)
-treeB_tips <- sort(treeB$tip.label)
-matching_tips <- identical(treeA_tips, treeB_tips)
-cat("Tip labels match between trees:", matching_tips, "\n")
-
-if (!matching_tips) {
-  # Identify differences in tip labels
-  only_in_A <- setdiff(treeA_tips, treeB_tips)
-  only_in_B <- setdiff(treeB_tips, treeA_tips)
+# For each metadata row, find the corresponding tip and categorise it
+for (i in seq_len(nrow(vw_metadata))) {
+  sid <- vw_metadata$SampleID[i]
+  hh_type <- vw_metadata$hh_type[i]
+  if (is.na(sid) || sid == "") next
   
-  if (length(only_in_A) > 0) {
-    cat("Tips only in Tree A:", length(only_in_A), "samples\n")
-    cat("First few:", head(only_in_A, 5), "\n")
+  # Try exact match
+  match_idx <- which(tip_df$label == sid)
+  # Fall back to matching prefix (before any date suffix)
+  if (length(match_idx) == 0) {
+    stripped_tips <- sub("-[0-9]{8}$", "", tip_df$label)
+    stripped_sid <- sub("-[0-9]{8}$", "", sid)
+    match_idx <- which(stripped_tips == stripped_sid)
   }
   
-  if (length(only_in_B) > 0) {
-    cat("Tips only in Tree B:", length(only_in_B), "samples\n")
-    cat("First few:", head(only_in_B, 5), "\n")
-  }
-  
-  # Use common tips only
-  common_tips <- intersect(treeA_tips, treeB_tips)
-  cat("Using", length(common_tips), "common tips for comparison\n")
-  
-  # Prune trees to common tips
-  treeA <- keep.tip(treeA, common_tips)
-  treeB <- keep.tip(treeB, common_tips)
-}
-
-# ==============================================================================
-# PART 3: Create association matrix for tanglegram
-# ==============================================================================
-
-cat("Creating association matrix for tanglegram...\n")
-
-# Create association matrix linking corresponding tips between trees
-association <- cbind(treeB$tip.label, treeA$tip.label)
-colnames(association) <- c("Tree_B", "Tree_A")
-
-cat("Association matrix dimensions:", nrow(association), "x", ncol(association), "\n")
-cat("Sample association matrix (first 5 rows):\n")
-print(head(association, 5))
-
-# ==============================================================================
-# PART 4: Generate cophylogenetic object and tanglegram
-# ==============================================================================
-
-cat("Generating cophylogenetic analysis object...\n")
-
-# Create cophylogenetic object for tanglegram
-obj <- cophylo(treeA, treeB, assoc = association, print = TRUE)
-
-cat("Cophylogenetic object created successfully\n")
-cat("Object summary:\n")
-print(obj)
-
-# ==============================================================================
-# PART 5: Create and save tanglegram visualization
-# ==============================================================================
-
-cat("Creating tanglegram visualization...\n")
-
-# Set up PDF output
-pdf_path <- file.path(output_dir, "SupplementaryFigure4_tanglegram.pdf")
-pdf(pdf_path, width = 16, height = 12)
-
-# Create tanglegram plot
-plot(obj, 
-     link.type = 'curved',           # Curved connecting lines
-     link.lwd = 1,                   # Line width
-     link.lty = 'solid',             # Solid lines
-     link.col = make.transparent('blue', 0.25),  # Semi-transparent blue lines
-     fsize = 0.2,                    # Font size for tip labels
-     pts = FALSE,                    # No points at tips
-     ftype = "i")                    # Italic font for tip labels
-
-# Add title and labels
-title(main = "Tanglegram: Phylogenetic Tree Comparison", 
-      sub = "Left: Full tree with bootstrap | Right: Consensus tree",
-      cex.main = 1.2, cex.sub = 1.0)
-
-# Close PDF device
-dev.off()
-
-cat("Tanglegram saved to:", pdf_path, "\n")
-
-# Also create PNG version for presentations
-png_path <- file.path(output_dir, "SupplementaryFigure4_tanglegram.png")
-png(png_path, width = 1600, height = 1200, res = 150)
-
-plot(obj, 
-     link.type = 'curved',
-     link.lwd = 1,
-     link.lty = 'solid',
-     link.col = make.transparent('blue', 0.25),
-     fsize = 0.2,
-     pts = FALSE,
-     ftype = "i")
-
-title(main = "Tanglegram: Phylogenetic Tree Comparison", 
-      sub = "Left: Full tree with bootstrap | Right: Consensus tree",
-      cex.main = 1.2, cex.sub = 1.0)
-
-dev.off()
-
-cat("PNG version saved to:", png_path, "\n")
-
-# ==============================================================================
-# PART 6: Tree comparison statistics and analysis
-# ==============================================================================
-
-cat("\n=== SUPPLEMENTARY FIGURE 4 ANALYSIS SUMMARY ===\n")
-
-# Basic tree statistics
-cat("Tree comparison statistics:\n")
-cat("- Tree A (full) tips:", Ntip(treeA), "\n")
-cat("- Tree A (full) nodes:", Nnode(treeA), "\n")
-cat("- Tree B (consensus) tips:", Ntip(treeB), "\n")
-cat("- Tree B (consensus) nodes:", Nnode(treeB), "\n")
-cat("- Trees identical:", trees_identical, "\n")
-
-# Robinson-Foulds distance
-if (require(phangorn, quietly = TRUE)) {
-  rf_distance <- RF.dist(treeA, treeB)
-  cat("- Robinson-Foulds distance:", rf_distance, "\n")
-  
-  # Normalized RF distance
-  max_rf <- 2 * (Ntip(treeA) - 3)  # Maximum possible RF distance
-  normalized_rf <- rf_distance / max_rf
-  cat("- Normalized RF distance:", round(normalized_rf, 3), "\n")
-} else {
-  cat("- Install 'phangorn' package for Robinson-Foulds distance calculation\n")
-}
-
-# Tree comparison metrics using ape
-if (Ntip(treeA) == Ntip(treeB)) {
-  # Cophenetic correlation
-  dist_A <- cophenetic.phylo(treeA)
-  dist_B <- cophenetic.phylo(treeB)
-  
-  # Calculate correlation between distance matrices
-  cophenetic_cor <- cor(as.vector(dist_A), as.vector(dist_B), use = "complete.obs")
-  cat("- Cophenetic correlation:", round(cophenetic_cor, 3), "\n")
-  
-  if (cophenetic_cor > 0.8) {
-    cat("  -> High correlation: trees are topologically similar\n")
-  } else if (cophenetic_cor > 0.6) {
-    cat("  -> Moderate correlation: some topological differences\n")
-  } else {
-    cat("  -> Low correlation: substantial topological differences\n")
+  if (length(match_idx) >= 1) {
+    match_idx <- match_idx[1]
+    if (hh_type == "hh1") {
+      tip_df$category[match_idx] <- "HH1: single-positive household"
+    } else if (hh_type == "hh2") {
+      tip_df$category[match_idx] <- "HH2: multi-positive (transmission)"
+    } else if (hh_type == "hh2_noTransmission") {
+      tip_df$category[match_idx] <- "HH2: multi-positive (no transmission)"
+    }
   }
 }
 
-# Tip label analysis
-common_tips <- intersect(treeA$tip.label, treeB$tip.label)
-cat("\nTip label analysis:\n")
-cat("- Tips in both trees:", length(common_tips), "\n")
-cat("- Tips only in Tree A:", length(setdiff(treeA$tip.label, treeB$tip.label)), "\n")
-cat("- Tips only in Tree B:", length(setdiff(treeB$tip.label, treeA$tip.label)), "\n")
+cat("Tips assigned to each category:\n")
+print(table(tip_df$category))
+cat("\n")
 
-# ==============================================================================
-# End of script
-# ==============================================================================
+tip_df$category <- factor(tip_df$category,
+                          levels = c("Nextstrain background",
+                                     "HH1: single-positive household",
+                                     "HH2: multi-positive (transmission)",
+                                     "HH2: multi-positive (no transmission)"))
+
+
+# ============================================================================
+# 4. Build the plot
+# ============================================================================
+
+category_colors <- c(
+  "Nextstrain background"                   = "grey80",
+  "HH1: single-positive household"          = "#1E90FF",
+  "HH2: multi-positive (transmission)"      = "#8A2BE2",
+  "HH2: multi-positive (no transmission)"   = "#FF8C00"
+)
+
+tip_df$point_size <- ifelse(tip_df$category == "Nextstrain background", 0.4, 2.5)
+tip_df$point_alpha <- ifelse(tip_df$category == "Nextstrain background", 0.4, 0.95)
+
+p <- ggtree(tree, layout = "fan", open.angle = 15, size = 0.12) %<+% tip_df +
+  geom_tippoint(aes(color = category, size = point_size, alpha = point_alpha)) +
+  scale_color_manual(values = category_colors,
+                     name = "Sample category",
+                     guide = guide_legend(override.aes = list(size = 4, alpha = 1))) +
+  scale_size_identity() +
+  scale_alpha_identity() +
+  theme(legend.position = c(0.90, 0.55),   # inside the plot, near top-right
+        legend.justification = c(0, 0.5),
+        legend.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 12),
+        legend.key = element_blank(),
+        legend.background = element_rect(fill = "white", colour = NA),
+        plot.margin = ggplot2::margin(5, 5, 5, 5))
+
+
+# ============================================================================
+# 5. Save at large canvas
+# ============================================================================
+
+ggsave(plot = p,
+       filename = output_path,
+       width = 18,
+       height = 18,
+       dpi = 300)
+
+cat("\nFigure saved to:", output_path, "\n")
